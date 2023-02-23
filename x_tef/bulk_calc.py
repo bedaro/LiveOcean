@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Code to calculate a TEF time series using Marvin Lorenz' new multi-layer code.
