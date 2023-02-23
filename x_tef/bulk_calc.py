@@ -6,6 +6,9 @@ Based on his code, and modified by PM.
 """
 
 import os
+import psutil
+import traceback
+from multiprocessing import Pool
 import sys
 alp = os.path.abspath('../alpha')
 if alp not in sys.path:
@@ -50,6 +53,7 @@ outdir = indir0 + 'bulk/'
 Lfun.make_dir(outdir)
 
 testing = False
+tasks = min(len(os.sched_getaffinity(0)), psutil.cpu_count(logical=False))
 for snp in sect_list:
     print('Working on ' + snp)
     out_fn = outdir + snp
@@ -73,12 +77,18 @@ for snp in sect_list:
     # low-pass
     if True:
         # tidal averaging
-        tef_q_lp = zfun.filt_godin_mat(tef_q)
-        tef_qs_lp = zfun.filt_godin_mat(tef_qs)
-        qnet_lp = zfun.filt_godin(qnet)
-        qabs_lp = zfun.filt_godin(qabs)
-        fnet_lp = zfun.filt_godin(fnet)
-        ssh_lp = zfun.filt_godin(ssh)
+        if not testing:
+            with Pool(tasks) as p:
+                tef_q_lp, tef_qs_lp = p.map(zfun.filt_godin_mat, [tef_q, tef_qs])
+                qnet_lp, qabs_lp, fnet_lp, ssh_lp = p.map(zfun.filt_godin, [
+                    qnet, qabs, fnet, ssh])
+        else:
+            tef_q_lp = zfun.filt_godin_mat(tef_q)
+            tef_qs_lp = zfun.filt_godin_mat(tef_qs)
+            qnet_lp = zfun.filt_godin(qnet)
+            qabs_lp = zfun.filt_godin(qabs)
+            fnet_lp = zfun.filt_godin(fnet)
+            ssh_lp = zfun.filt_godin(ssh)
         pad = 36
     else:
         # nday Hanning window
@@ -122,9 +132,7 @@ for snp in sect_list:
     souts=[]
 
     # prepare arrays to hold multi-layer output
-    nlay = 30
-    QQ = np.nan * np.ones((NT, nlay))
-    SS = np.nan * np.ones((NT, nlay))
+    nlay = 55
 
     if testing:
         plt.close('all')
@@ -134,69 +142,98 @@ for snp in sect_list:
         dd_list = range(NT)
         print_info = False
 
-    for dd in dd_list:
-            
-        qv = Qv[dd,:]
-        qs = Qs[dd,:]
+    excs = {}
+    def process_time(dd):
+        global excs
+        try:
+            qv = Qv[dd,:]
+            qs = Qs[dd,:]
     
-        if print_info == True:
-            print('\n**** dd = %d ***' % (dd))
-        
-        Q_in_m, Q_out_m, s_in_m, s_out_m, div_sal, ind, minmax = tfl.calc_bulk_values(sedges,
-            qv, qs, print_info=print_info)
-        
-        if print_info == True:
-            print(' ind = %s' % (str(ind)))
-            print(' minmax = %s' % (str(minmax)))
-            print(' div_sal = %s' % (str(div_sal)))
-            print(' Q_in_m = %s' % (str(Q_in_m)))
-            print(' s_in_m = %s' % (str(s_in_m)))
-            print(' Q_out_m = %s' % (str(Q_out_m)))
-            print(' s_out_m = %s' % (str(s_out_m)))
-        
-            fig = plt.figure(figsize=(12,8))
-        
-            ax = fig.add_subplot(121)
-            ax.plot(Qv[dd,:], sedges,'.k')
-            min_mask = minmax=='min'
-            max_mask = minmax=='max'
-            print(min_mask)
-            print(max_mask)
-            ax.plot(Qv[dd,ind[min_mask]], sedges[ind[min_mask]],'*b')
-            ax.plot(Qv[dd,ind[max_mask]], sedges[ind[max_mask]],'*r')
-            ax.grid(True)
-            ax.set_title('Q(s) Time index = %d' % (dd))
-            ax.set_ylim(-.1,36.1)
-            ax.set_ylabel('Salinity')
-        
-            ax = fig.add_subplot(122)
-            ax.plot(tef_q_lp[dd,:], sbins)
-            ax.grid(True)
-            ax.set_title('-dQ/ds')
-        
-        # save multi-layer output
-        qq = np.concatenate((Q_in_m, Q_out_m))
-        ss = np.concatenate((s_in_m, s_out_m))
-        ii = np.argsort(ss)
-        if len(ii)>0:
-            ss = ss[ii]
-            qq = qq[ii]
-            NL = len(qq)
-            QQ[dd, :NL] = qq
-            SS[dd, :NL] = ss
+            if print_info == True:
+                print('\n**** dd = %d ***' % (dd))
 
-        dd+=1
-    
+            Q_in_m, Q_out_m, s_in_m, s_out_m, div_sal, ind, minmax = tfl.calc_bulk_values(sedges,
+                qv, qs, print_info=print_info)
+
+            if print_info == True:
+                print(' ind = %s' % (str(ind)))
+                print(' minmax = %s' % (str(minmax)))
+                print(' div_sal = %s' % (str(div_sal)))
+                print(' Q_in_m = %s' % (str(Q_in_m)))
+                print(' s_in_m = %s' % (str(s_in_m)))
+                print(' Q_out_m = %s' % (str(Q_out_m)))
+                print(' s_out_m = %s' % (str(s_out_m)))
+
+                fig = plt.figure(figsize=(12,8))
+
+                ax = fig.add_subplot(121)
+                ax.plot(Qv[dd,:], sedges,'.k')
+                min_mask = minmax=='min'
+                max_mask = minmax=='max'
+                print(min_mask)
+                print(max_mask)
+                ax.plot(Qv[dd,ind[min_mask]], sedges[ind[min_mask]],'*b')
+                ax.plot(Qv[dd,ind[max_mask]], sedges[ind[max_mask]],'*r')
+                ax.grid(True)
+                ax.set_title('Q(s) Time index = %d' % (dd))
+                ax.set_ylim(-.1,36.1)
+                ax.set_ylabel('Salinity')
+
+                ax = fig.add_subplot(122)
+                ax.plot(tef_q_lp[dd,:], sbins)
+                ax.grid(True)
+                ax.set_title('-dQ/ds')
+
+            # save multi-layer output
+            qq = np.concatenate((Q_in_m, Q_out_m))
+            ss = np.concatenate((s_in_m, s_out_m))
+            ii = np.argsort(ss)
+            if len(ii)>0:
+                ss = ss[ii]
+                qq = qq[ii]
+                NL = len(qq)
+                assert NL <= nlay, f'nlay too small (currently {nlay}, need at least {NL})'
+                QQ = np.nan * np.ones(nlay)
+                SS = np.nan * np.ones(nlay)
+                QQ[:NL] = qq
+                SS[:NL] = ss
+
+        except Exception as e:
+            # TODO under Python 3.11 can use e.add_note() to annotate the
+            # exception, then they can all be re-raised later as an
+            # ExceptionGroup
+            print(f'Exception {type(e)} with dd = {dd}')
+            raise e
+
+        else:
+            return QQ, SS, ind, minmax, div_sal
+
+    if not testing:
+        with Pool(tasks) as p:
+            res = p.map(process_time, dd_list)
+    else:
+        res = [process_time(dd) for dd in dd_list]
+    QQ = np.array([x[0] for x in res])
+    SS = np.array([x[1] for x in res])
+    ind = np.array([x[2] for x in res])
+    minmax = np.array([x[3] for x in res])
+    div_sal = np.array([x[4] for x in res])
+
     if testing == False:
         # save results
         bulk = dict()
         bulk['QQ'] = QQ
         bulk['SS'] = SS
         bulk['ot'] = ot
+        bulk['Qv'] = Qv
+        bulk['sedges'] = sedges
+        bulk['ind'] = ind
+        bulk['minmax'] = minmax
         bulk['qnet_lp'] = qnet_lp
         bulk['qabs_lp'] = qabs_lp
         bulk['fnet_lp'] = fnet_lp
         bulk['ssh_lp'] = ssh_lp
+        bulk['div_sal'] = div_sal
         pickle.dump(bulk, open(out_fn, 'wb'))
     else:
         plt.show()

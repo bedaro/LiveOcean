@@ -13,6 +13,8 @@ from datetime import datetime
 import pickle
 
 import os
+import psutil
+from multiprocessing import Pool
 import sys
 alp = os.path.abspath('../alpha')
 if alp not in sys.path:
@@ -80,56 +82,64 @@ for tef_file in sect_list:
     sbins = sedges[:-1] + np.diff(sedges)/2
     NS = len(sbins) # number of salinity bins
 
-    # TEF variables
-    tef_q = np.zeros((NT, NS))
-    tef_qs = np.zeros((NT, NS))
-
-    # other variables
-    qnet = np.zeros(NT)
-    fnet = np.zeros(NT)
-    ssh = np.zeros(NT)
     g = 9.8
     rho = 1025
 
-    for tt in range(NT):
-        if np.mod(tt,100) == 0:
-            print('  time %d out of %d' % (tt,NT))
-            sys.stdout.flush()
-            
+    def process_time(tt):
+
         si = s[tt,:,:].squeeze()
         if isinstance(si, np.ma.MaskedArray):
             sf = si[si.mask==False].data.flatten()
         else:
             sf = si.flatten()
-            
+
         qi = q[tt,:,:].squeeze()
         if isinstance(qi, np.ma.MaskedArray):
             qf = qi[qi.mask==False].data.flatten()
         else:
             qf = qi.flatten()
-            
+
         qsi = qs[tt,:,:].squeeze()
         if isinstance(qsi, np.ma.MaskedArray):
             qsf = qsi[si.mask==False].data.flatten()
         else:
             qsf = qsi.flatten()
-            
+
         # sort into salinity bins
         inds = np.digitize(sf, sedges, right=True)
         indsf = inds.copy().flatten()
+        us, ucs = np.unique(indsf, return_counts=True)
+        ucs_max = ucs.max()
+
         counter = 0
+        tef_q = np.zeros(NS)
+        tef_qs = np.zeros(NS)
         for ii in indsf:
-            tef_q[tt, ii-1] += qf[counter]
-            tef_qs[tt, ii-1] += qsf[counter]
+            tef_q[ii-1] += qf[counter]
+            tef_qs[ii-1] += qsf[counter]
             counter += 1
-        
+
         # also keep track of volume transport
-        qnet[tt] = qf.sum()
-        
+        qnet = qf.sum()
+
         # and tidal energy flux
         zi = zeta[tt,:].squeeze()
         ff = zi.reshape((1,NX)) * qi
-        fnet[tt] = g * rho * ff.sum()
+        fnet = g * rho * ff.sum()
+
+        return tef_q, tef_qs, qnet, fnet, ucs_max
+
+    tasks = min(len(os.sched_getaffinity(0)), psutil.cpu_count(logical=False))
+    with Pool(tasks) as p:
+        res = p.map(process_time, range(NT))
+        tef_q = np.array([x[0] for x in res])
+        assert tef_q.shape == (NT, NS)
+        tef_qs = np.array([x[1] for x in res])
+        qnet = np.array([x[2] for x in res])
+        fnet = np.array([x[3] for x in res])
+        ucs_max = np.max([x[4] for x in res])
+    if ucs_max > 1:
+        print(f'WARNING: salinity bins not small enough? {ucs_max} points in one bin')
 
     # save results
     tef_dict = dict()

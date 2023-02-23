@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Plot bulk fluxes as a time series.
 """
@@ -10,14 +11,17 @@ Ldir = Lfun.Lstart()
 sys.path.append(os.path.abspath(Ldir['LO'] + 'plotting'))
 import pfun
 
+from multiprocessing import Pool
 import numpy as np
 import matplotlib.pyplot as plt
+from netCDF4 import Dataset
 import pickle
 from datetime import datetime, timedelta
+# 2019.11.14 make monthly averages
+import pandas as pd
 
+sys.path.append(os.path.abspath(Ldir['LO'] + 'x_tef'))
 import tef_fun
-# get the DataFrame of all sections
-sect_df = tef_fun.get_sect_df()
 
 from warnings import filterwarnings
 filterwarnings('ignore') # skip some warning messages
@@ -29,11 +33,6 @@ Ldir = Lfun.Lstart()
 indir0 = Ldir['LOo'] + 'tef/'
 # choose the tef extraction to process
 item = Lfun.choose_item(indir0)
-
-# hacky way of getting the year, assumes "item" is of the form:
-# 'cas6_v3_lo8b_2017.01.01_2017.12.31'
-year_str = item.split('_')[-1].split('.')[0]
-year = int(year_str)
 
 indir0 = indir0 + item + '/'
 indir = indir0 + 'bulk/'
@@ -60,9 +59,9 @@ Lfun.make_dir(outdir)
             
 #plt.close('all')
 
-sect_list = [item for item in sect_list if item.replace('.p','') in sect_df.index]
+sect_list = [item for item in sect_list]
 
-for snp in sect_list:
+def process_section(snp):
     
     sn = snp.replace('.p','')
 
@@ -80,6 +79,10 @@ for snp in sect_list:
     for tt in ot:
         dt.append(Lfun.modtime_to_datetime(tt))
     td = []
+    extract_file = indir0 + '/extractions/' + sn + '.nc'
+    extract_nc = Dataset(extract_file)
+
+    year = int(extract_nc.date_string0.split(".")[0])
     for tt in dt:
         #ttt = tt- datetime(dt[0].year,1,1)
         ttt = tt - datetime(year,1,1) # hardwire for 2016.12.15 start
@@ -87,24 +90,7 @@ for snp in sect_list:
     td = np.array(td) # time in days from start of the year
     Time = td.reshape((NT,1)) * np.ones((1,NS)) # matrix version
 
-    # some information about direction
-    x0, x1, y0, y1, landward = sect_df.loc[sn,:]    
-    if (x0==x1) and (y0!=y1):
-        sdir = 'NS'
-        if landward == 1:
-            dir_str = 'Eastward'
-        elif landward == -1:
-            dir_str = 'Westward'
-        a = [y0, y1]; a.sort()
-        y0 = a[0]; y1 = a[1]
-    elif (x0!=x1) and (y0==y1):
-        sdir = 'EW'
-        if landward == 1:
-            dir_str = 'Northward'
-        elif landward == -1:
-            dir_str = 'Southward'
-        a = [x0, x1]; a.sort()
-        x0 = a[0]; x1 = a[1]
+    dir_str = "Up-Estuary"
         
     # separate out positive and negative transports
     QQp = QQ.copy()
@@ -123,8 +109,6 @@ for snp in sect_list:
     Qnet = np.nansum(QQ, axis=1)
     # RESULT: it is identical
     
-    # 2019.11.14 make monthly averages
-    import pandas as pd
     td_list = []
     for t in td:
         td_list.append(datetime(year,1,1,0,0,0) + timedelta(days=t))
@@ -133,16 +117,18 @@ for snp in sect_list:
     tef_df.loc[:,'Qout']=Qout
     tef_df.loc[:,'Sin']=Sin
     tef_df.loc[:,'Sout']=Sout
+    tef_df.to_csv(outdir + sn + '.csv')
     tef_mean_df = tef_df.resample('1M').mean()
     # the above puts timestamps at the end of the month
     # so here we set it to the middle of each month becasue it is more
     # consistent with the averaging
     tef_mean_df.index -= timedelta(days=15)
     tef_mean_df.loc[:,'yd'] = tef_mean_df.index.dayofyear
-    
 
     # PLOTTING
-    fig = plt.figure(figsize=(21,9))
+    # See https://stackoverflow.com/a/65910539/413862 for how num and
+    # clear prevent memory leaks
+    fig = plt.figure(num=1 if save_fig else None, figsize=(21,9))
     
     alpha = .5
 
@@ -223,18 +209,12 @@ for snp in sect_list:
     ax.set_xlabel('Days from 1/1/' + str(year))
     ax.set_ylabel('Qnet 1000 m3/s')
     
-    # Section location map
-    ax = fig.add_subplot(1,3,3)
-    ax.plot([x0, x1], [y0, y1], '-m', linewidth=3)
-    ax.set_title(sn)
-    pfun.add_coast(ax)
-    pfun.dar(ax)
-    aa = [x0-.7, x1+.7, y0-.5, y1+.5]
-    ax.axis(aa)
-    
-
     if save_fig:
         plt.savefig(outdir + sn + '.png')
-        plt.close()
+        fig.clear()
     else:
         plt.show()
+
+tasks = len(os.sched_getaffinity(0))
+with Pool(tasks) as p:
+    p.map(process_section, sect_list)
