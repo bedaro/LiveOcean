@@ -2,7 +2,9 @@
 """
 Process TEF extractions.
 
-Currently only set up to do salt.
+Supports constituents produced from Ben's FVCOM-based extractor. There
+should be a NetCDF attribute containing a comma-delimited list of the
+available constituent variable names.
 
 """
 
@@ -68,6 +70,11 @@ for tef_file in sect_list:
     ds = nc.Dataset(fn)
     q = ds['q'][:]
     s = ds['salt'][:]
+    qc = {}
+    if "vn_list" in ds.ncattrs():
+        statevars = ds.vn_list.split(",")
+        statevars.remove('salt')
+        qc = {k: q * ds[k][:] for k in statevars}
     ot = ds['ocean_time'][:]
     zeta = ds['zeta'][:]
     gtagex = ds.gtagex
@@ -86,25 +93,28 @@ for tef_file in sect_list:
     g = 9.8
     rho = 1025
 
+    def flat(a):
+        if isinstance(a, np.ma.MaskedArray):
+            return a[a.mask==False].data.flatten()
+        else:
+            return a.flatten()
+
     def process_time(tt):
 
         si = s[tt,:,:].squeeze()
-        if isinstance(si, np.ma.MaskedArray):
-            sf = si[si.mask==False].data.flatten()
-        else:
-            sf = si.flatten()
+        sf = flat(si)
 
         qi = q[tt,:,:].squeeze()
-        if isinstance(qi, np.ma.MaskedArray):
-            qf = qi[qi.mask==False].data.flatten()
-        else:
-            qf = qi.flatten()
+        qf = flat(qi)
+
+        qci = {}
+        qcf = {}
+        for k in statevars:
+            qci[k] = qc[k][tt,:,:].squeeze()
+            qcf[k] = flat(qci[k])
 
         qsi = qs[tt,:,:].squeeze()
-        if isinstance(qsi, np.ma.MaskedArray):
-            qsf = qsi[si.mask==False].data.flatten()
-        else:
-            qsf = qsi.flatten()
+        qsf = flat(qsi)
 
         # sort into salinity bins
         inds = np.digitize(sf, sedges, right=True)
@@ -115,9 +125,12 @@ for tef_file in sect_list:
         counter = 0
         tef_q = np.zeros(NS)
         tef_qs = np.zeros(NS)
+        tef_qc = {k: np.zeros(NS) for k in statevars}
         for ii in indsf:
             tef_q[ii-1] += qf[counter]
             tef_qs[ii-1] += qsf[counter]
+            for k in statevars:
+                tef_qc[k][ii-1] += qcf[k][counter]
             counter += 1
 
         # also keep track of volume transport
@@ -128,7 +141,7 @@ for tef_file in sect_list:
         ff = zi.reshape((1,NX)) * qi
         fnet = g * rho * ff.sum()
 
-        return tef_q, tef_qs, qnet, fnet, ucs_max
+        return tef_q, tef_qs, tef_qc, qnet, fnet, ucs_max
 
     tasks = min(len(os.sched_getaffinity(0)), psutil.cpu_count(logical=False))
     with Pool(tasks) as p:
@@ -136,9 +149,10 @@ for tef_file in sect_list:
         tef_q = np.array([x[0] for x in res])
         assert tef_q.shape == (NT, NS)
         tef_qs = np.array([x[1] for x in res])
-        qnet = np.array([x[2] for x in res])
-        fnet = np.array([x[3] for x in res])
-        ucs_max = np.max([x[4] for x in res])
+        tef_qc = {k: np.array([x[2][k] for x in res]) for k in statevars}
+        qnet = np.array([x[3] for x in res])
+        fnet = np.array([x[4] for x in res])
+        ucs_max = np.max([x[5] for x in res])
     if ucs_max > 1:
         print(f'WARNING: salinity bins not small enough? {ucs_max} points in one bin')
 
@@ -146,6 +160,7 @@ for tef_file in sect_list:
     tef_dict = dict()
     tef_dict['tef_q'] = tef_q
     tef_dict['tef_qs'] = tef_qs
+    tef_dict['tef_qc'] = tef_qc
     tef_dict['sbins'] = sbins
     tef_dict['ot'] = ot
     tef_dict['qnet'] = qnet

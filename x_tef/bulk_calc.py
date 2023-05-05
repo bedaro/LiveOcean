@@ -8,7 +8,6 @@ Based on his code, and modified by PM.
 
 import os
 import psutil
-import traceback
 from multiprocessing import Pool
 import sys
 alp = os.path.abspath('../alpha')
@@ -70,6 +69,8 @@ for snp in sect_list:
     ot = tef_ex['ot']
     tef_q = tef_ex['tef_q']
     tef_qs = tef_ex['tef_qs']
+    tef_qc = tef_ex['tef_qc'] if 'tef_qc' in tef_ex else {}
+    statevars = list(tef_qc.keys())
     qnet = tef_ex['qnet']
     qabs = np.abs(qnet)
     fnet = tef_ex['fnet']
@@ -80,12 +81,19 @@ for snp in sect_list:
         # tidal averaging
         if not testing:
             with Pool(tasks) as p:
-                tef_q_lp, tef_qs_lp = p.map(zfun.filt_godin_mat, [tef_q, tef_qs])
+                lowpass_in = [tef_q, tef_qs]
+                for k in statevars:
+                    lowpass_in.append(tef_qc[k])
+                res = p.map(zfun.filt_godin_mat, lowpass_in)
+                tef_q_lp = res[0]
+                tef_qs_lp = res[1]
+                tef_qc_lp = {k: res[i+2] for i,k in enumerate(statevars)}
                 qnet_lp, qabs_lp, fnet_lp, ssh_lp = p.map(zfun.filt_godin, [
                     qnet, qabs, fnet, ssh])
         else:
             tef_q_lp = zfun.filt_godin_mat(tef_q)
             tef_qs_lp = zfun.filt_godin_mat(tef_qs)
+            tef_qc_lp = {k: zfun.filt_godin_mat(tef_qc[k]) for k in statevars}
             qnet_lp = zfun.filt_godin(qnet)
             qabs_lp = zfun.filt_godin(qabs)
             fnet_lp = zfun.filt_godin(fnet)
@@ -97,6 +105,7 @@ for snp in sect_list:
         nfilt = nday*24
         tef_q_lp = zfun.filt_hanning_mat(tef_q, n=nfilt)
         tef_qs_lp = zfun.filt_hanning_mat(tef_qs, n=nfilt)
+        tef_qc_lp = {k: zfun.filt_hanning_mat(tef_qc[k], n=nfilt) for k in statevars}
         qnet_lp = zfun.filt_hanning(qnet, n=nfilt)
         qabs_lp = zfun.filt_hanning(qabs, n=nfilt)
         fnet_lp = zfun.filt_hanning(fnet, n=nfilt)
@@ -106,6 +115,8 @@ for snp in sect_list:
     # subsample and cut off nans
     tef_q_lp = tef_q_lp[pad:-(pad+1):24, :]
     tef_qs_lp = tef_qs_lp[pad:-(pad+1):24, :]
+    for k in statevars:
+        tef_qc_lp[k] = tef_qc_lp[k][pad:-(pad+1):24, :]
     ot = ot[pad:-(pad+1):24]
     qnet_lp = qnet_lp[pad:-(pad+1):24]
     qabs_lp = qabs_lp[pad:-(pad+1):24]
@@ -121,19 +132,19 @@ for snp in sect_list:
     # calculate Q(s) and Q_s(s)
     Qv=np.zeros((NT, NS))
     Qs=np.zeros((NT, NS))
+    Qc = {k: np.zeros((NT, NS)) for k in statevars}
     # Note that these are organized low s to high s, but still follow
     # the TEF formal definitions from MacCready (2011)
     Qv[:,:-1] = np.fliplr(np.cumsum(np.fliplr(tef_q_lp), axis=1))
     Qs[:,:-1] = np.fliplr(np.cumsum(np.fliplr(tef_qs_lp), axis=1))
+    for k in statevars:
+        Qc[k][:,:-1] = np.fliplr(np.cumsum(np.fliplr(tef_qc_lp[k]), axis=1))
 
     #get bulk values
     Qins=[]
     Qouts=[]
     sins=[]
     souts=[]
-
-    # prepare arrays to hold multi-layer output
-    nlay = 55
 
     if testing:
         plt.close('all')
@@ -143,18 +154,40 @@ for snp in sect_list:
         dd_list = range(NT)
         print_info = False
 
+    def reduce(list_of_lists):
+        """Convert a ragged list of arrays into a 2d numpy array"""
+        max_y = np.max([len(l) for l in list_of_lists])
+        res = np.zeros((len(list_of_lists), max_y),
+                dtype=list_of_lists[0].dtype)
+        if np.issubdtype(res.dtype, np.float):
+            # Fill with NaN
+            res *= np.nan
+        elif np.issubdtype(res.dtype, np.integer):
+            # Fill with -1
+            res -= 1
+        for i,l in enumerate(list_of_lists):
+            res[i,:len(l)] = l
+        return res
+
     excs = {}
     def process_time(dd):
         global excs
         try:
             qv = Qv[dd,:]
             qs = Qs[dd,:]
+            qc = {k: Qc[k][dd,:] for k in statevars}
     
             if print_info == True:
                 print('\n**** dd = %d ***' % (dd))
 
             Q_in_m, Q_out_m, s_in_m, s_out_m, div_sal, ind, minmax = tfl.calc_bulk_values(sedges,
                 qv, qs, print_info=print_info)
+            Qc_in_m = {}
+            Qc_out_m = {}
+            sc_in_m = {}
+            sc_out_m = {}
+            for k in statevars:
+                Qc_in_m[k], Qc_out_m[k], sc_in_m[k], sc_out_m[k], *drop = tfl.calc_bulk_values(sedges, qc[k], qs)
 
             if print_info == True:
                 print(' ind = %s' % (str(ind)))
@@ -190,14 +223,17 @@ for snp in sect_list:
             ss = np.concatenate((s_in_m, s_out_m))
             ii = np.argsort(ss)
             if len(ii)>0:
-                ss = ss[ii]
-                qq = qq[ii]
-                NL = len(qq)
-                assert NL <= nlay, f'nlay too small (currently {nlay}, need at least {NL})'
-                QQ = np.nan * np.ones(nlay)
-                SS = np.nan * np.ones(nlay)
-                QQ[:NL] = qq
-                SS[:NL] = ss
+                QQ = qq[ii]
+                SS = ss[ii]
+            QQC = {}
+            SSC = {}
+            for k in statevars:
+                qqc = np.concatenate((Qc_in_m[k], Qc_out_m[k]))
+                ssc = np.concatenate((sc_in_m[k], sc_out_m[k]))
+                iic = np.argsort(ssc)
+                if len(iic) > 0:
+                    QQC[k] = qqc[iic]
+                    SSC[k] = ssc[iic]
 
         except Exception as e:
             # TODO under Python 3.11 can use e.add_note() to annotate the
@@ -207,24 +243,38 @@ for snp in sect_list:
             raise e
 
         else:
-            return QQ, SS, ind, minmax, div_sal
+            return QQ, SS, QQC, SSC, ind, minmax, div_sal
 
     if not testing:
         with Pool(tasks) as p:
             res = p.map(process_time, dd_list)
     else:
         res = [process_time(dd) for dd in dd_list]
-    QQ = np.array([x[0] for x in res])
-    SS = np.array([x[1] for x in res])
-    ind = np.array([x[2] for x in res])
-    minmax = np.array([x[3] for x in res])
-    div_sal = np.array([x[4] for x in res])
+    QQ = reduce([x[0] for x in res])
+    SS = reduce([x[1] for x in res])
+    QQC = {}
+    SSC = {}
+    for k in statevars:
+        if k not in res[0][2]:
+            continue
+        a = []
+        b = []
+        for x in res:
+            a.append(x[2][k])
+            b.append(x[3][k])
+        QQC[k] = reduce(a)
+        SSC[k] = reduce(b)
+    ind = reduce([x[4] for x in res])
+    minmax = reduce([x[5] for x in res])
+    div_sal = reduce([x[6] for x in res])
 
     if testing == False:
         # save results
         bulk = dict()
         bulk['QQ'] = QQ
         bulk['SS'] = SS
+        bulk['QQC'] = QQC
+        bulk['SSC'] = SSC
         bulk['ot'] = ot
         bulk['Qv'] = Qv
         bulk['sedges'] = sedges
@@ -238,6 +288,3 @@ for snp in sect_list:
         pickle.dump(bulk, open(out_fn, 'wb'))
     else:
         plt.show()
-
-
-
