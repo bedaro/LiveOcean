@@ -6,8 +6,11 @@ Created on Tue Oct 16 16:01:15 2018
 """
 
 import numpy as np
+import scipy.signal as signal
 
-def find_extrema(x, comp=5, print_info=False): # new, reduced, better described
+# Rewritten by Ben Roberts to fix some edge cases not handled
+# well in the old version by lorenz and PM
+def find_extrema(x, comp=5):
     """
     input
     x = Q(S)
@@ -16,154 +19,78 @@ def find_extrema(x, comp=5, print_info=False): # new, reduced, better described
 
     indices = []
     minmax = []
-    
-    i = 0
-    while i < len(x): # np.shape(x)[0]:
-        
-        # set a to be i-1 (except for the first point, where a = 0)
-        # assuming comp = 1
-        if i-comp < 0:
-            a = 0
-        else:
-            a=i-comp
-            
-        # set b to be i + 2 (unless it puts it out of bounds, then b = None)
-        if i+comp >= len(x):
-            b=None
-        else:
-            b=i+comp+1
-            
-        # so [a:b] is the three points centered on i (for comp = 1)
-        if (x[i] == np.max(x[a:b])) and (np.max(x[a:b]) != np.min(x[a:b])):# and (x[i] != x[i-1]):
-            indices.append(i)
-            minmax.append('max')
-        # this does not catch an initial increase...
-        elif (x[i] == np.min(x[a:b])) and (np.max(x[a:b]) != np.min(x[a:b])):# and (x[i] != x[i-1]):
-            indices.append(i)
-            minmax.append('min')
-        i+=1
-        
-    if print_info:
-        print('* first step')
-        print(' >> indices = %s' % (str(indices)))
-        print(' >> minmax = %s' % (str(minmax)))
-        
-    # correct min min min or max max max parts,
-    # especially in the beginning and end of the Q(S)
-    ii=1
-    while ii < len(indices):
-        index=[]
-        if minmax[ii] == minmax[ii-1]:
-            if minmax[ii] == 'max': #note the index of the smaller maximum
-                if x[indices[ii]]>=x[indices[ii-1]]:
-                    index.append(ii-1)
+
+    # Find smin and smax locations by examining deltas. The first and
+    # last nonzero delta are the min and max salinity
+    idx_smin, idx_smax = (x[:-1] - x[1:]).nonzero()[0][[0,-1]]
+    idx_smax += 1
+    # Use find_peaks to get the sufficiently prominent/wide max and min
+    # values
+    find_peak_args = {
+        'width': comp,
+        'prominence': (x.max() - x.min())/50
+    }
+    maxs, _ = signal.find_peaks(x, **find_peak_args)
+    mins, _ = signal.find_peaks(-1*x, **find_peak_args)
+    # Assemble indices and minmax, ensuring they interweave. It's possible
+    # they won't because find_peaks's width and prominence checks may not
+    # work on maxima and minima symmetrically for nonsymmetric signals. If
+    # that happens, insert the max/min of the slice between the indices
+    # where an extremum is missing
+    indices = []
+    minmax = []
+    prev_is_min = None
+    all_peaks_troughs = np.sort(np.concatenate((mins, maxs)))
+    # Remove idx_smin and idx_smax if present; those get handled later
+    all_peaks_troughs = np.delete(all_peaks_troughs,
+            np.isin(all_peaks_troughs, [idx_smin, idx_smax]))
+    for idx,prev in zip(all_peaks_troughs,
+            [None] + all_peaks_troughs[:-1].tolist()):
+        is_max = idx in maxs
+        if prev is not None:
+            prev_is_min = prev in mins
+            if is_max != prev_is_min:
+                pick_from = x[prev+1:idx]
+                if is_max:
+                    indices.append(prev + 1 + pick_from.argmin())
+                    minmax.append('min')
                 else:
-                    index.append(ii)
-            elif minmax[ii] == 'min': #note the index of the greater minimum
-                if x[indices[ii]]<=x[indices[ii-1]]:
-                    index.append(ii-1)
-                else:
-                    index.append(ii)
-            minmax = np.asarray(minmax)
-            indices = np.asarray(indices)
-            indices = np.delete(indices, index)
-            minmax = np.delete(minmax, index)
-        else:
-            ii+=1
-    
-    if print_info:
-        print('* after correct min min min or max max max parts')
-        print(' >> indices = %s' % (str(indices)))
-        print(' >> minmax = %s' % (str(minmax)))
-    
-    # delete too small transports
-    ii=0
-    while ii < len(indices)-1: 
-        index=[]
-        
-        # PM edit: define min_transport dynamically
-        min_transport = (x.max() - x.min())/20
-        if np.abs(x[indices[ii+1]]-x[indices[ii]]) <= min_transport:
-            if ii == 0:
-                # if smin is involved and the transport is too small,
-                # smin has to change its min or max property
-                index.append(ii+1)
-                if minmax[ii] == 'min':
-                    minmax[ii] = 'max'
-                else:
-                    minmax[ii] = 'min'
-            elif ii+1==len(indices)-1:
-                # if smax is involved and the transport is too small,
-                # smin has to change its min or max property
-                index.append(ii)
-                if minmax[ii+1] == 'min':
-                    minmax[ii+1] = 'max'
-                else:
-                    minmax[ii+1] = 'min'
-            else: # else both involved div sals are kicked out
-                if ii+2 < len(indices)-1:
-                    # check and compare to i+2
-                    if minmax[ii]=='min':
-                        if x[indices[ii+2]]>x[indices[ii]]:
-                            index.append(ii+2)
-                            index.append(ii+1)
-                        else:
-                            index.append(ii)
-                            index.append(ii+1)
-                    elif minmax[ii]=='max':
-                        if x[indices[ii+2]]<x[indices[ii]]:
-                            index.append(ii+2)
-                            index.append(ii+1)
-                        else:
-                            index.append(ii)
-                            index.append(ii+1)
-                else:
-                    index.append(ii)
-                    index.append(ii+1)
-            # PM edit
-            minmax = np.asarray(minmax)
-            indices = np.asarray(indices)
-            #
-            indices = np.delete(indices, index)
-            minmax = np.delete(minmax, index)
-        else:
-            ii+=1
-            
-    if print_info:
-        print('* after delete too small transports')
-        print(' >> indices = %s' % (str(indices)))
-        print(' >> minmax = %s' % (str(minmax)))
-    
-    # so far the first and last minmax does not correspond
-    # to smin and smax of the data, expecially smin due to numerical errors
-    
-    # correct smin index
-    if len(x)>4: # an odd constraint - in practice this will always be true
-        
-        # this section seems to give rise to errors when the code above did not 
-        # catch the initial min.
-        ii=1
-        while (np.abs(np.abs(x[ii])-np.abs(x[0])) < 1e-10) and (ii < len(x)-1):
-            ii+=1
-        indices[0]=ii-1
-        #correct smax index
-        if x[-1]==0: #for low salinity classes Q[-1] might not be zero as supposed.
-            jj=-1
-            while (x[jj] == 0) and (np.abs(jj) < len(x)-1):
-                jj-=1
-            indices[-1]=len(x)+jj+1
-            
-        # PM edit
-        minmax = np.asarray(minmax)
-        indices = np.asarray(indices)
-        
-    if print_info:
-        print('* after correct smin index')
-        print(' >> indices = %s' % (str(indices)))
-        print(' >> minmax = %s' % (str(minmax)))
-    
-            
-    return indices, minmax
+                    indices.append(prev + 1 + pick_from.argmax())
+                    minmax.append('max')
+        indices.append(idx)
+        minmax.append('max' if is_max else 'min')
+    if len(indices) > 0:
+        # Append smax and figure out if it's a min or max
+        last_mm = 'min' if x[idx_smax] < x[indices[-1]] else 'max'
+        if last_mm == minmax[-1]:
+            pick_from = x[indices[-1]+1:idx_smax]
+            if last_mm == 'max':
+                indices.append(indices[-1] + 1 + pick_from.argmin())
+                minmax.append('min')
+            else:
+                indices.append(indices[-1] + 1 + pick_from.argmax())
+                minmax.append('max')
+        minmax.append(last_mm)
+        indices.append(idx_smax)
+        # Finally, prepend smin and figure out if it's a min or max
+        first_mm = 'min' if x[idx_smin] < x[indices[0]] else 'max'
+        if first_mm == minmax[0]:
+            pick_from = x[idx_smin+1:indices[0]]
+            if first_mm == 'max':
+                indices.insert(0, idx_smin + 1 + pick_from.argmin())
+                minmax.insert(0, 'min')
+            else:
+                indices.insert(0, idx_smin + 1 + pick_from.argmax())
+                minmax.insert(0, 'max')
+        minmax.insert(0, first_mm)
+        indices.insert(0, idx_smin)
+    else:
+        # Trivial case
+        indices = [idx_smin, idx_smax]
+        smin_is_min = x[idx_smin] < x[idx_smax]
+        minmax = ['min','max'] if smin_is_min else ['max','min']
+
+    return np.array(indices), np.array(minmax)
 
 def calc_bulk_values(s, Qv, Qs, print_info=False):
     """
@@ -174,7 +101,7 @@ def calc_bulk_values(s, Qv, Qs, print_info=False):
     min_trans=minimum transport to consider
     """    
     # use the find_extrema algorithm
-    ind, minmax = find_extrema(Qv, print_info=print_info)
+    ind, minmax = find_extrema(Qv)
     
     # compute dividing salinities
     smin=s[0]
