@@ -159,10 +159,10 @@ for snp in sect_list:
         max_y = np.max([len(l) for l in list_of_lists])
         res = np.zeros((len(list_of_lists), max_y),
                 dtype=list_of_lists[0].dtype)
-        if np.issubdtype(res.dtype, np.float):
+        if np.issubdtype(res.dtype, float):
             # Fill with NaN
             res *= np.nan
-        elif np.issubdtype(res.dtype, np.integer):
+        elif np.issubdtype(res.dtype, int):
             # Fill with -1
             res -= 1
         for i,l in enumerate(list_of_lists):
