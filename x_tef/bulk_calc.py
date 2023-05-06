@@ -225,6 +225,9 @@ for snp in sect_list:
             if len(ii)>0:
                 QQ = qq[ii]
                 SS = ss[ii]
+            else:
+                QQ = np.array([])
+                SS = np.array([])
             QQC = {}
             SSC = {}
             for k in statevars:
@@ -260,8 +263,12 @@ for snp in sect_list:
         a = []
         b = []
         for x in res:
-            a.append(x[2][k])
-            b.append(x[3][k])
+            if k in x[2]:
+                a.append(x[2][k])
+                b.append(x[3][k])
+            else:
+                a.append(np.array([]))
+                b.append(np.array([]))
         QQC[k] = reduce(a)
         SSC[k] = reduce(b)
     ind = reduce([x[4] for x in res])
