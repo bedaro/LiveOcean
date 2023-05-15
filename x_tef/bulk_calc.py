@@ -225,6 +225,9 @@ for snp in sect_list:
             if len(ii)>0:
                 QQ = qq[ii]
                 SS = ss[ii]
+            else:
+                QQ = np.array([])
+                SS = np.array([])
             QQC = {}
             SSC = {}
             for k in statevars:

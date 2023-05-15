@@ -75,6 +75,8 @@ for tef_file in sect_list:
         statevars = ds.vn_list.split(",")
         statevars.remove('salt')
         qc = {k: q * ds[k][:] for k in statevars}
+    else:
+        statevars = []
     ot = ds['ocean_time'][:]
     zeta = ds['zeta'][:]
     gtagex = ds.gtagex
