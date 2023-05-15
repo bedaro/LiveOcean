@@ -6,6 +6,7 @@ Code to calculate a TEF time series using Marvin Lorenz' new multi-layer code.
 Based on his code, and modified by PM.
 """
 
+from argparse import ArgumentParser
 import os
 import psutil
 from multiprocessing import Pool
@@ -25,34 +26,64 @@ import tef_fun_lorenz as tfl
 from importlib import reload
 reload(tfl)
 
-# choose input and organize output
-Ldir = Lfun.Lstart()
-indir0 = Ldir['LOo'] + 'tef/'
-# choose the tef extraction to process
-item = Lfun.choose_item(indir0)
+def dir_path(string):
+    if not os.path.isdir(string):
+        raise NotADirectoryError(string)
+    return string
+
+parser = ArgumentParser(description='Calculate a TEF time series')
+parser.add_argument('--loo', type=dir_path, help='LiveOcean Output dir')
+parser.add_argument('-s', '--section', nargs='*',
+        help='Section(s) to process, or "all"')
+parser.add_argument('--test', action='store_true', help='Enable test mode')
+parser.add_argument('item', nargs='?', help='The TEF extraction to process')
+args = parser.parse_args()
+
+if args.loo is None:
+    # choose input and organize output
+    Ldir = Lfun.Lstart()
+    indir0 = os.path.join(Ldir['LOo'], 'tef/')
+else:
+    indir0 = os.path.join(args.loo, 'tef/')
+if args.item is None:
+    # choose the tef extraction to process
+    item = Lfun.choose_item(indir0)
+else:
+    item = args.item
 indir0 = indir0 + item + '/'
 indir = indir0 + 'processed/'
 sect_list_raw = os.listdir(indir)
 sect_list_raw.sort()
 sect_list = [item for item in sect_list_raw if ('.p' in item)]
-print(20*'=' + ' Processed Sections ' + 20*'=')
-print(*sect_list, sep=", ")
-print(61*'=')
-# select which sections to process
-my_choice = input('-- Input section to process (e.g. sog5, or Return to process all): ')
-if len(my_choice)==0:
+if args.section is None:
+    print(20*'=' + ' Processed Sections ' + 20*'=')
+    print(*sect_list, sep=", ")
+    print(61*'=')
+    # select which sections to process
+    my_choice = input('-- Input section to process (e.g. sog5, or Return to process all): ')
+    if len(my_choice)==0:
+        # full list
+        my_choice = sect_list
+    else: # single item
+        my_choice = [my_choice]
+elif len(args.section) == 1 and args.section[0] == 'all':
     # full list
-    pass
-else: # single item
-    if (my_choice + '.p') in sect_list:
-        sect_list = [my_choice + '.p']
-    else:
-        print('That section is not available')
-        sys.exit()
+    my_choice = sect_list
+else: # one or more items
+    my_choice = args.section
+if my_choice != sect_list:
+    found_choices = []
+    for c in my_choice:
+        if (c + '.p') in sect_list:
+            found_choices.append(c + '.p')
+        else:
+            raise FileNotFoundError(os.path.join(indir, c + '.p'))
+    sect_list = found_choices
+
 outdir = indir0 + 'bulk/'
 Lfun.make_dir(outdir)
 
-testing = False
+testing = args.test
 tasks = min(len(os.sched_getaffinity(0)), psutil.cpu_count(logical=False))
 for snp in sect_list:
     print('Working on ' + snp)
@@ -271,7 +302,7 @@ for snp in sect_list:
     minmax = reduce([x[5] for x in res])
     div_sal = reduce([x[6] for x in res])
 
-    if testing == False:
+    if not testing:
         # save results
         bulk = dict()
         bulk['QQ'] = QQ

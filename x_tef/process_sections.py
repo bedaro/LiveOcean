@@ -15,6 +15,7 @@ import numpy as np
 from datetime import datetime
 import pickle
 
+from argparse import ArgumentParser
 import os
 import psutil
 from multiprocessing import Pool
@@ -25,32 +26,68 @@ if alp not in sys.path:
 import Lfun
 import zfun
 
-Ldir = Lfun.Lstart()
+def dir_path(string):
+    if not os.path.isdir(string):
+        raise NotADirectoryError(string)
+    return string
 
-indir0 = Ldir['LOo'] + 'tef/'
-# choose the tef extraction to process
-item = Lfun.choose_item(indir0)
+def odd_whole(num):
+    if num.isdecimal():
+        num = int(num)
+        if num % 2 == 1:
+            return num
+    raise ValueError(f"{num} must be an odd whole number")
+
+parser = ArgumentParser(description='Process TEF extractions')
+parser.add_argument('--loo', type=dir_path, help='LiveOcean Output dir')
+parser.add_argument('-s', '--section', nargs='*',
+        help='Section(s) to process, or "all"')
+parser.add_argument('--bins', default=1001, type=odd_whole,
+        help='Customize bin size')
+parser.add_argument('item', nargs='?', help='The TEF extraction to process')
+args = parser.parse_args()
+
+if args.loo is None:
+    Ldir = Lfun.Lstart()
+    indir0 = os.path.join(Ldir['LOo'], 'tef/')
+else:
+    indir0 = os.path.join(args.loo, 'tef/')
+if args.item is None:
+    # choose the tef extraction to process
+    item = Lfun.choose_item(indir0)
+else:
+    item = args.item
 indir0 = indir0 + item + '/'
 indir = indir0 + 'extractions/'
 
 sect_list_raw = os.listdir(indir)
 sect_list_raw.sort()
 sect_list = [item for item in sect_list_raw if ('.nc' in item)]
-print(20*'=' + ' Extracted Sections ' + 20*'=')
-print(*sect_list, sep=", ")
-print(61*'=')
-# select which sections to process
-my_choice = input('-- Input section to process (e.g. sog5, or Return to process all): ')
-if len(my_choice)==0:
+if args.section is None:
+    print(20*'=' + ' Extracted Sections ' + 20*'=')
+    print(*sect_list, sep=", ")
+    print(61*'=')
+    # select which sections to process
+    my_choice = input('-- Input section to process (e.g. sog5, or Return to process all): ')
+    if len(my_choice)==0:
+        # full list
+        my_choice = sect_list
+    else: # single item
+        my_choice = [my_choice]
+elif len(args.section) == 1 and args.section[0] == 'all':
     # full list
-    pass
-else: # single item
-    if (my_choice + '.nc') in sect_list:
-        sect_list = [my_choice + '.nc']
-    else:
-        print('That section is not available')
-        sys.exit()
-    
+    my_choice = sect_list
+else: # one or more items
+    my_choice = args.section
+if my_choice != sect_list:
+    found_choices = []
+    for c in my_choice:
+        if (c + '.nc') in sect_list:
+            found_choices.append(c + '.nc')
+        else:
+            raise FileNotFoundError(os.path.join(indir, c + '.nc'))
+    sect_list = found_choices
+
 outdir = indir0 + 'processed/'
 Lfun.make_dir(outdir)
 
@@ -88,7 +125,7 @@ for tef_file in sect_list:
     qs = q*s
     NT, NZ, NX = q.shape
     # initialize intermediate results arrays for TEF quantities
-    sedges = np.linspace(0, 36, 1001) # original was 1001 used 5001 for Willapa
+    sedges = np.linspace(0, 36, args.bins) # original was 1001 used 5001 for Willapa
     sbins = sedges[:-1] + np.diff(sedges)/2
     NS = len(sbins) # number of salinity bins
 
