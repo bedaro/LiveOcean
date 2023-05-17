@@ -19,6 +19,7 @@ import zfun
 Ldir = Lfun.Lstart()
 
 import numpy as np
+from numpy.random import default_rng
 import pickle
 import matplotlib.pyplot as plt
 
@@ -36,6 +37,13 @@ parser.add_argument('--loo', type=dir_path, help='LiveOcean Output dir')
 parser.add_argument('-s', '--section', nargs='*',
         help='Section(s) to process, or "all"')
 parser.add_argument('--test', action='store_true', help='Enable test mode')
+parser.add_argument('--subsamp-random', '-r', action='store_true',
+        help='Enable random subsampling rather than at a fixed interval')
+parser.add_argument('--subsamp-n', '-n', type=int, default=24,
+        help='Subsampling interval (fixed or mean)')
+parser.add_argument('--subsamp-seed', type=int, help='Subsampling random seed')
+parser.add_argument('--subsamp-noreplace', action='store_true',
+        help='Subsample without replacement')
 parser.add_argument('item', nargs='?', help='The TEF extraction to process')
 args = parser.parse_args()
 
@@ -85,6 +93,7 @@ Lfun.make_dir(outdir)
 
 testing = args.test
 tasks = min(len(os.sched_getaffinity(0)), psutil.cpu_count(logical=False))
+rng = default_rng(args.subsamp_seed)
 for snp in sect_list:
     print('Working on ' + snp)
     out_fn = outdir + snp
@@ -144,15 +153,29 @@ for snp in sect_list:
         pad = int(np.ceil(nfilt/2))
 
     # subsample and cut off nans
-    tef_q_lp = tef_q_lp[pad:-(pad+1):24, :]
-    tef_qs_lp = tef_qs_lp[pad:-(pad+1):24, :]
-    for k in statevars:
-        tef_qc_lp[k] = tef_qc_lp[k][pad:-(pad+1):24, :]
-    ot = ot[pad:-(pad+1):24]
-    qnet_lp = qnet_lp[pad:-(pad+1):24]
-    qabs_lp = qabs_lp[pad:-(pad+1):24]
-    fnet_lp = fnet_lp[pad:-(pad+1):24]
-    ssh_lp = ssh_lp[pad:-(pad+1):24]
+    if args.subsamp_random:
+        idxs = np.arange(len(qnet_lp))[~np.isnan(qnet_lp)]
+        choices = rng.choice(idxs, size=int(len(idxs)/args.subsamp_n),
+                             replace=(not args.subsamp_noreplace))
+        tef_q_lp = tef_q_lp[choices, :]
+        tef_qs_lp = tef_qs_lp[choices, :]
+        for k in statevars:
+            tef_qc_lp[k] = tef_qc_lp[k][choices, :]
+        ot = ot[choices]
+        qnet_lp = qnet_lp[choices]
+        qabs_lp = qabs_lp[choices]
+        fnet_lp = fnet_lp[choices]
+        ssh_lp = ssh_lp[choices]
+    else:
+        tef_q_lp = tef_q_lp[pad:-(pad+1):args.subsamp_n, :]
+        tef_qs_lp = tef_qs_lp[pad:-(pad+1):args.subsamp_n, :]
+        for k in statevars:
+            tef_qc_lp[k] = tef_qc_lp[k][pad:-(pad+1):args.subsamp_n, :]
+        ot = ot[pad:-(pad+1):args.subsamp_n]
+        qnet_lp = qnet_lp[pad:-(pad+1):args.subsamp_n]
+        qabs_lp = qabs_lp[pad:-(pad+1):args.subsamp_n]
+        fnet_lp = fnet_lp[pad:-(pad+1):args.subsamp_n]
+        ssh_lp = ssh_lp[pad:-(pad+1):args.subsamp_n]
 
     # get sizes and make sedges (the edges of sbins)
     DS=sbins[1]-sbins[0]
